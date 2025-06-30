@@ -7,3 +7,4 @@ chromadb
 python-dotenv
 streamlit
 tiktoken
+google-generativeai
