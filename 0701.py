@@ -57,18 +57,44 @@ with st.sidebar:
 st.title("🤖 정책 큐레이터")
 st.caption("AI 기반 맞춤형 정책 탐색기 (UI 프로토타입)")
 
-# 추천 질문 버튼
-st.markdown("##### 무엇을 도와드릴까요?")
-cols = st.columns(3)
-if cols[0].button("청년 월세 지원 자격 알려줘", use_container_width=True):
-    st.session_state.selected_question = "청년 월세 지원 자격 알려줘"
-if cols[1].button("내일채움공제 신청 방법", use_container_width=True):
-    st.session_state.selected_question = "내일채움공제 신청 방법"
-if cols[2].button("귀농 지원 정책 찾아줘", use_container_width=True):
-    st.session_state.selected_question = "귀농 지원 정책 찾아줘"
+# 추천 질문 데이터
+recommended_questions_db = {
+    "주거 지원": ["청년 월세 지원 자격 알려줘", "신혼부부 전세 대출 조건", "생애최초 주택 구입 혜택"],
+    "일자리/창업": ["개발자 신입 채용 공고 찾아줘", "창업 지원금 종류 알려줘", "내일채움공제 신청 방법"],
+    "금융/자산 형성": ["청년희망적금 만기 후 비과세 혜택", "개인종합자산관리계좌(ISA)란?", "신용점수 올리는 방법"],
+    "생활/복지": ["K-패스 신청 방법 알려줘", "육아휴직 급여 신청하기", "문화누리카드 사용처"]
+}
 
+# 컨텍스트 기반 추천 질문 생성
+st.markdown("##### 무엇을 도와드릴까요?")
+profile_interests = st.session_state.get("profile", {}).get("interests", [])
+if profile_interests:
+    # 선택된 관심 분야 중 첫 번째 것을 기준으로 질문 표시
+    main_interest = profile_interests[0]
+    questions_to_show = recommended_questions_db.get(main_interest, [])
+else:
+    # 기본 추천 질문
+    questions_to_show = ["청년 월세 지원 자격 알려줘", "내일채움공제 신청 방법", "귀농 지원 정책 찾아줘"]
+
+cols = st.columns(len(questions_to_show))
+for i, question in enumerate(questions_to_show):
+    if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
+        st.session_state.selected_question = question
+        # This will trigger a rerun because of the prompt handling logic below
 
 # --- 지능형 채팅 인터페이스 ---
+
+# 동적 온보딩 메시지 생성 (대화 기록이 비어있을 때만)
+if not st.session_state.messages:
+    profile = st.session_state.get("profile", {})
+    if profile.get("age") and profile.get("interests"):
+        age = profile["age"]
+        interest_str = ", ".join(f"'{i}'" for i in profile["interests"])
+        welcome_message = f"안녕하세요! {age}세이시군요. {interest_str} 분야에 관심이 있으시네요. 무엇을 도와드릴까요?"
+    else:
+        welcome_message = "안녕하세요! 어떤 정책이 궁금하신가요? 좌측 사이드바에서 맞춤 조건을 설정하면 더 정확한 추천을 받을 수 있어요."
+    
+    st.session_state.messages.append({"role": "assistant", "content": welcome_message})
 
 # 이전 대화 기록 표시
 for i, message in enumerate(st.session_state.messages):
