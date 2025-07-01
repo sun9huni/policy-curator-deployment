@@ -59,9 +59,6 @@ if "profile" not in st.session_state:
     st.session_state.profile = {}
 if "selected_question" not in st.session_state:
     st.session_state.selected_question = None
-# [개선] 비교함을 위한 세션 상태 추가 (정책 제목을 key로 사용)
-if "compare_basket" not in st.session_state:
-    st.session_state.compare_basket = {}
 
 # --- 좌측 사이드바 ---
 with st.sidebar:
@@ -121,26 +118,12 @@ for i, message in enumerate(st.session_state.messages):
         if "cards" in message:
             for card in message["cards"]:
                 with st.container(border=True):
-                    card_id = card["title"]
-                    # [개선] 비교함 체크박스 추가
-                    is_in_basket = card_id in st.session_state.compare_basket
-                    if st.checkbox("비교함에 담기", value=is_in_basket, key=f"compare_{card_id}"):
-                        if not is_in_basket:
-                            st.session_state.compare_basket[card_id] = card
-                            st.rerun()
-                    else:
-                        if is_in_basket:
-                            del st.session_state.compare_basket[card_id]
-                            st.rerun()
-
                     st.subheader(card["title"])
                     st.write(card["summary"])
-                    # [개선] st.metric을 사용한 핵심 지표 시각화
                     st.metric(label="나와 일치도", value=f"{card['match_rate']}%")
                     with st.expander("자세히 보기 및 출처 확인"):
                         st.markdown(card["details"])
                         st.caption(f"출처: {card['source']}")
-
 
 # 사용자 입력 처리
 prompt = st.chat_input("궁금한 정책에 대해 질문해보세요.")
