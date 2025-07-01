@@ -86,15 +86,6 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-    # [개선] 비교함 UI 사이드바에 추가
-    if st.session_state.compare_basket:
-        st.header("📋 비교함")
-        for title in st.session_state.compare_basket.keys():
-            st.info(f"☑️ {title}")
-        if st.button("🗑️ 비교함 비우기", use_container_width=True):
-            st.session_state.compare_basket = {}
-            st.rerun()
-
 # --- 메인 화면 ---
 st.title("🤖 정책 큐레이터")
 st.caption("AI 기반 맞춤형 정책 탐색기 (UI 프로토타입)")
@@ -150,20 +141,6 @@ for i, message in enumerate(st.session_state.messages):
                         st.markdown(card["details"])
                         st.caption(f"출처: {card['source']}")
 
-# --- [개선] 정책 비교 섹션 ---
-if len(st.session_state.compare_basket) >= 2:
-    st.header("📊 정책 비교하기")
-    items_to_compare = list(st.session_state.compare_basket.values())
-    
-    # 비교 테이블 생성
-    cols = st.columns(len(items_to_compare))
-    for i, item in enumerate(items_to_compare):
-        with cols[i]:
-            st.subheader(item["title"])
-            st.metric(label="나와 일치도", value=f"{item['match_rate']}%")
-            st.markdown("---")
-            st.markdown(item["details"])
-            st.caption(f"출처: {item['source']}")
 
 # 사용자 입력 처리
 prompt = st.chat_input("궁금한 정책에 대해 질문해보세요.")
