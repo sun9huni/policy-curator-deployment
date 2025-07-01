@@ -5,8 +5,75 @@ import time
 st.set_page_config(
     page_title="정책 큐레이터",
     page_icon="🤖",
-    layout="centered"
+    layout="wide" # [개선] 레이아웃을 'wide'로 변경하여 더 넓은 화면 사용
 )
+
+# [개선] CSS를 직접 주입하여 앱의 전체적인 디자인을 세련되게 변경
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap');
+
+html, body, [class*="css"]  {
+    font-family: 'IBM Plex Sans KR', sans-serif;
+}
+
+/* 메인 배경 색상 */
+.stApp {
+    background-color: #F0F2F6;
+}
+
+/* 사이드바 스타일링 */
+[data-testid="stSidebar"] {
+    background-color: #FFFFFF;
+    border-right: 1px solid #E0E0E0;
+}
+
+/* 추천 질문 버튼 스타일링 */
+.stButton > button {
+    border: 1px solid #E0E0E0;
+    border-radius: 10px;
+    color: #31333F;
+    background-color: #FFFFFF;
+    transition: all 0.2s ease-in-out;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.stButton > button:hover {
+    border-color: #0068C9;
+    color: #0068C9;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+/* 사이드바의 '조건 저장' 버튼 특별 스타일링 */
+div[data-testid="stSidebar"] .stButton > button {
+    background-color: #0068C9;
+    color: white;
+    border: none;
+}
+div[data-testid="stSidebar"] .stButton > button:hover {
+    background-color: #0055A3;
+    color: white;
+}
+
+/* AI 답변 메시지(st.info) 스타일링 */
+div[data-testid="stInfo"] {
+    background-color: #E9F5FF;
+    border-left: 5px solid #0068C9;
+    border-radius: 10px;
+    color: #212529;
+}
+
+/* 정책 카드 컨테이너 스타일링 */
+div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] .st-emotion-cache-12w0qpk {
+    background-color: #FFFFFF;
+    border-radius: 10px;
+    padding: 1.2rem 1rem 1rem 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 
 # --- 세션 상태 초기화 ---
 if "messages" not in st.session_state:
@@ -34,8 +101,7 @@ with st.sidebar:
         household_type = st.selectbox("가구 형태", ['1인 가구', '2인 이상 가구', '신혼부부'], index=["1인 가구", "2인 이상 가구", "신혼부부"].index(st.session_state.profile.get("household_type", "1인 가구")))
         keywords = st.text_input("관심 키워드 입력", placeholder="예: 스마트팜, 전세 대출", value=st.session_state.profile.get("keywords", ""))
 
-    # [개선] '조건 저장' 버튼 클릭 시 초록색 성공 메시지를 표시하여 명확한 피드백 제공
-    if st.button("✅ 조건 저장 및 반영", type="primary"): # 'primary' 타입으로 버튼 강조
+    if st.button("✅ 조건 저장 및 반영", type="primary", use_container_width=True):
         st.session_state.profile = {
             "age": age,
             "location": location,
@@ -91,15 +157,14 @@ if not st.session_state.messages:
 # 이전 대화 기록 표시
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
-        # [개선] AI 답변은 st.info()를 사용해 시각적으로 구분
         if message["role"] == "assistant":
-            st.info(message["content"])
+            # [개선] AI 답변은 st.info() 대신 커스텀 CSS가 적용된 st.markdown으로 표시
+            st.markdown(f'<div class="st-emotion-cache-1c7y2kd">{message["content"]}</div>', unsafe_allow_html=True)
         else:
             st.markdown(message["content"])
 
         if "cards" in message:
             for card in message["cards"]:
-                # [개선] 정책 카드는 st.container(border=True)를 사용해 중립적인 UI로 표시
                 with st.container(border=True):
                     st.subheader(card["title"])
                     st.write(card["summary"])
@@ -126,9 +191,8 @@ if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     
     with st.chat_message("assistant"):
-        # [개선] AI 응답 시뮬레이션도 st.info()를 사용
         simulated_response_text = "네, 입력해주신 조건에 맞는 정책들을 찾았어요."
-        st.info(simulated_response_text)
+        st.markdown(f'<div class="st-emotion-cache-1c7y2kd">{simulated_response_text}</div>', unsafe_allow_html=True)
         
         card1 = { "title": "서울시 청년월세지원", "summary": "월 최대 20만원, 12개월간 지원", "match_rate": 85, "details": "- **지원대상**: 서울에 거주하는 만 19세~39세 무주택 청년 1인 가구...", "source": "2024년 서울시 청년월세지원 모집 공고문" }
         card2 = { "title": "국토교통부 청년월세 한시 특별지원", "summary": "월 최대 20만원, 12개월간 지원 (2차 사업)", "match_rate": 70, "details": "- **지원대상**: 부모와 별도 거주하는 만 19세~34세 무주택 청년...", "source": "국토교통부 2차 청년월세 한시 특별지원 보도자료" }
