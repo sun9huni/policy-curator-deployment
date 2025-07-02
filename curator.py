@@ -155,9 +155,19 @@ with st.sidebar:
         ['주거', '일자리/창업', '금융/자산', '복지/문화'],
         default=st.session_state.profile.get("interests", [])
     )
+    # [개선] 버튼 클릭 시 프로필 저장과 함께 동적 메시지를 생성합니다.
     if st.button("✅ 조건 저장 및 반영", type="primary", use_container_width=True):
         st.session_state.profile = { "age": age, "interests": interests }
         st.success("맞춤 조건이 저장되었습니다!")
+
+        # [개선] 저장된 프로필을 기반으로 동적 환영 메시지를 생성하고 대화 기록에 추가합니다.
+        if interests:
+             welcome_message = f"안녕하세요! {age}세, '{interests[0]}' 분야에 관심이 있으시군요. 이제부터 맞춤형으로 답변해 드릴게요!"
+        else:
+             welcome_message = f"안녕하세요! {age}세이시군요. 관심 분야를 선택하시면 더 정확한 추천을 받을 수 있어요."
+        
+        st.session_state.messages.append({"role": "assistant", "content": welcome_message})
+        
         time.sleep(1)
         st.rerun()
 
