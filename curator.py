@@ -219,48 +219,93 @@ recommended_questions_db = {
     ]
 }
 
-# 초기 환영 메시지
+st.markdown("##### 무엇을 도와드릴까요?")
+profile_interests = st.session_state.get("profile", {}).get("interests", [])
+questions_to_show = recommended_questions_db.get(
+    profile_interests[0],
+    ["자립준비청년 자립수당 알려줘?", "희망두배 청년통장 신청 조건 알려줘"]
+) if profile_interests else ["자립준비청년 자립수당 알려줘?", "희망두배 청년통장 신청 조건 알려줘"]
+
+cols = st.columns(len(questions_to_show))
+for i, question in enumerate(questions_to_show):
+    if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
+        st.session_state.selected_question = question
+
+# -----------------------
+# CHAT UI
+# -----------------------
+
 if not st.session_state.messages:
     profile = st.session_state.get("profile", {})
-    if profile.get("age") and profile.get("interests"):
-        welcome_message = f"안녕하세요! {profile['age']}세, '{profile['interests'][0]}' 분야에 관심이 있으시군요."
-    else:
-        welcome_message = "안녕하세요! 어떤 정책이 궁금하신가요?"
+    welcome_message = f"안녕하세요! {profile['age']}세, '{profile['interests'][0]}' 분야에 관심이 있으시군요." if profile.get("age") and profile.get("interests") else "안녕하세요! 어떤 정책이 궁금하신가요?"
     st.session_state.messages.append({"role": "assistant", "content": welcome_message})
 
-# 이전 대화 기록 표시
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        if "sources" in message:
+            with st.expander("📚 근거 자료 확인하기"):
+                for source in message["sources"]:
+                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')})")
+                    st.write(source.page_content)
 
-# 사용자 입력 처리
-if prompt := st.chat_input("궁금한 정책에 대해 질문해보세요."):
+prompt = st.chat_input("궁금한 정책에 대해 질문해보세요.")
+if st.session_state.selected_question:
+    prompt = st.session_state.selected_question
+    st.session_state.selected_question = None
+
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        try:
-            response_placeholder = st.empty()
-            full_response = ""
+        with st.spinner("질문을 분석하고 관련 정보를 찾는 중입니다..."):
+            try:
+                expanded_queries = expand_keywords(prompt)
 
-            stream_handler = conversational_rag_chain.stream(
-                {"input": prompt},
-                {"configurable": {"session_id": "any_session_id"}},
-            )
+                expansion_prompt = PromptTemplate.from_template(
+                    """당신은 한국 청년 정책 검색어 전문가입니다.
+                    사용자의 질문을 보고, 관련성이 높은 정책명, 제도명, 혹은 프로그램명을 최대 3개 생성해주세요.
+                    특히 다른 이름으로 불릴 가능성이 있다면 반드시 포함해주세요.
+                    쉼표로 구분된 하나의 문자열로 응답해주세요.
+                    질문: {question}"""
+                )
+                query_expansion_chain = expansion_prompt | llm | StrOutputParser()
+                expanded_queries_str = query_expansion_chain.invoke({"question": prompt})
+                expanded_queries += [q.strip() for q in expanded_queries_str.split(',') if q.strip()]
+                expanded_queries = list(set(expanded_queries))
 
-            for chunk in stream_handler:
-                if "answer" in chunk:
-                    full_response += chunk["answer"]
-                    response_placeholder.markdown(full_response + "▌")
-            
-            response_placeholder.markdown(full_response)
-            
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
+                all_retrieved_docs = []
+                for q in expanded_queries:
+                    all_retrieved_docs.extend(retriever.invoke(q))
 
-        except Exception as e:
-            error_message = f"답변 생성 중 오류가 발생했습니다: {e}"
-            st.error(error_message)
-            st.session_state.messages.append({"role": "assistant", "content": error_message})
-            
+                unique_docs = list({doc.page_content: doc for doc in all_retrieved_docs}.values())
+
+                final_docs = []
+                if unique_docs:
+                    pairs = [[prompt, doc.page_content] for doc in unique_docs]
+                    scores = reranker_model.predict(pairs)
+                    doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
+                    final_docs = [doc for score, doc in doc_scores[:3]]
+
+                if final_docs:
+                    context = "\n\n".join(doc.page_content for doc in final_docs)
+                    final_prompt = prompt_template.format(context=context, question=prompt)
+                    response = llm.invoke(final_prompt).content
+                else:
+                    response = "죄송합니다. PDF 문서에서도 정보를 찾을 수 없습니다. 다른 질문을 시도해보세요!"
+
+                st.markdown(response)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response,
+                    "sources": final_docs
+                })
+
+            except Exception as e:
+                error_message = f"답변 생성 중 오류가 발생했습니다: {e}"
+                st.error(error_message)
+                st.session_state.messages.append({"role": "assistant", "content": error_message})
+
     st.rerun()
