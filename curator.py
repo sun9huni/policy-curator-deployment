@@ -10,7 +10,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from streamlit.runtime.caching.hashing import _CodeHasher
 from sentence_transformers import CrossEncoder
 
 # -----------------------
