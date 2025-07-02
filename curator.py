@@ -265,7 +265,7 @@ if prompt:
                     pairs = [[prompt, doc.page_content] for doc in unique_docs]
                     scores = reranker_model.predict(pairs)
                     doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
-                    final_docs = [doc for score, doc in doc_scores[:3]]
+                    final_docs = [doc for score, doc in doc_scores[:5]]
 
                 if final_docs:
                     context = "\n\n".join(doc.page_content for doc in final_docs)
