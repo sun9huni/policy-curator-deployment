@@ -217,7 +217,7 @@ with st.sidebar:
         st.success("맞춤 조건이 저장되었습니다!")
 
         if interests:
-            welcome_message = f"안녕하세요! {age}세, '{interests[0]}' '{interests[1]}' 분야에 관심이 있으시군요. 이제부터 맞춤형으로 답변해 드릴게요!"
+            welcome_message = f"안녕하세요! {age}세, '{interests[0]}' 분야에 관심이 있으시군요. 이제부터 맞춤형으로 답변해 드릴게요!"
         else:
             welcome_message = f"안녕하세요! {age}세이시군요. 관심 분야를 선택하시면 더 정확한 추천을 받을 수 있어요."
         
