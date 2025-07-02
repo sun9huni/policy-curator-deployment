@@ -204,7 +204,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "sources" in message:
-            with st.expander("� 근거 자료 확인하기"):
+            with st.expander("📚 근거 자료 확인하기"):
                 for source in message["sources"]:
                     st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')})")
                     st.write(source.page_content)
