@@ -1,13 +1,14 @@
 import streamlit as st
 import os
 import time
+import re
 from langchain_openai import ChatOpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Qdrant
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda, RunnableConfig
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import CrossEncoder
@@ -16,8 +17,8 @@ from sentence_transformers import CrossEncoder
 # PAGE CONFIG
 # -----------------------
 st.set_page_config(
-    page_title="정책 큐레이터 v2",
-    page_icon="🤖",
+    page_title="정책 큐레이터 v3",
+    page_icon="🎯",
     layout="wide",
 )
 
@@ -25,7 +26,6 @@ st.set_page_config(
 # SECRETS
 # -----------------------
 try:
-    # Streamlit Cloud에 저장된 OpenAI API 키를 가져옵니다.
     openai_api_key = st.secrets["OPENAI_API_KEY"]
 except Exception:
     st.error("오류: OpenAI API 키를 찾을 수 없습니다. Streamlit Cloud의 Secrets 설정을 확인해주세요.")
@@ -68,13 +68,8 @@ DATA_PATH = "./data"
 @st.cache_resource
 def get_models_and_prompts():
     """LLM, Reranker, Prompts 등 모델 관련 객체들을 로드하고 캐싱합니다."""
-    # 답변 생성을 위한 LLM
     llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0.1)
-    
-    # Reranking을 위한 CrossEncoder 모델
     reranker_model = CrossEncoder('bongsoo/kpf-cross-encoder-v1')
-
-    # MultiQueryRetriever를 위한 질문 생성 프롬프트
     QUERY_PROMPT = PromptTemplate(
         input_variables=["question"],
         template="""당신은 사용자의 질문을 다양한 관점에서 유사한 질문들로 다시 생성하는 AI입니다.
@@ -83,8 +78,6 @@ def get_models_and_prompts():
         질문은 반드시 한국어로 작성되어야 합니다. 각 질문은 다음 줄로 구분해주세요.
         원본 질문: {question}""",
     )
-
-    # 최종 답변 생성을 위한 프롬프트
     response_prompt = ChatPromptTemplate.from_template(
         """당신은 대한민국 정부의 청년 정책 전문가입니다. 사용자의 질문에 대해 아래 '문서 내용'을 바탕으로, 명확하고 친절하게 답변해주세요.
         답변은 항상 한국어로 작성해야 합니다. 단계별로 알기 쉽게 설명해주세요.
@@ -102,48 +95,50 @@ def get_models_and_prompts():
     )
     return llm, reranker_model, QUERY_PROMPT, response_prompt
 
-# --- 2. 벡터 저장소 및 Retriever 정의 ---
+# --- 2. 벡터 저장소 생성 (✨ 1단계 적용) ---
 @st.cache_resource
-def get_vector_store_and_retriever(_llm, _query_prompt):
-    """PDF 문서를 로드, 분할하고 벡터 저장소와 Retriever를 생성합니다."""
+def create_vector_store():
+    """PDF 문서를 로드, 분할하고 '정책 유형' 메타데이터를 추가하여 벡터 저장소를 생성합니다."""
     if not os.path.exists(DATA_PATH) or not any(f.endswith('.pdf') for f in os.listdir(DATA_PATH)):
-        st.error(f"오류: '{DATA_PATH}' 폴더를 찾을 수 없거나 PDF 파일이 없습니다. 앱을 실행하기 전에 PDF 문서를 data 폴더에 넣어주세요.")
+        st.error(f"오류: '{DATA_PATH}' 폴더를 찾을 수 없거나 PDF 파일이 없습니다.")
         st.stop()
 
-    with st.spinner("PDF 문서를 읽고 처리하는 중입니다. 잠시만 기다려주세요..."):
-        # PDF 문서 로드
+    with st.spinner("정책 문서를 읽고 분석하여 데이터베이스를 구축하는 중입니다..."):
         documents = []
         for file in os.listdir(DATA_PATH):
             if file.endswith('.pdf'):
                 loader = PyPDFLoader(os.path.join(DATA_PATH, file))
                 documents.extend(loader.load())
 
-        # 텍스트 분할
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         chunks = text_splitter.split_documents(documents)
 
-        # ✨ [개선점 1] 한국어 특화 임베딩 모델 사용
+        # ✨ [1단계] 각 chunk에 '정책 유형' 메타데이터 추가
+        current_policy_types = []
+        for chunk in chunks:
+            # 정규식을 사용하여 '정책 유형: ...' 패턴을 찾습니다.
+            match = re.search(r"정책 유형:\s*(.*)", chunk.page_content)
+            if match:
+                # 유형이 여러 개일 수 있으므로(예: 복지/문화, 금융/자산), 쉼표로 분리합니다.
+                types_str = match.group(1).strip()
+                current_policy_types = [t.strip() for t in types_str.split(',')]
+
+            # chunk의 메타데이터에 'policy_type' 리스트를 추가합니다.
+            chunk.metadata['policy_type'] = current_policy_types
+
         embedding_model = HuggingFaceEmbeddings(
             model_name="jhgan/ko-sbert-nli",
             model_kwargs={'device': 'cpu'},
             encode_kwargs={'normalize_embeddings': True}
         )
-
-        # Qdrant 벡터 저장소 생성 (인메모리 방식)
         vectorstore = Qdrant.from_documents(
-            chunks, embedding_model, location=":memory:", collection_name="policy_documents"
+            chunks, embedding_model, location=":memory:", collection_name="policy_documents_filtered"
         )
+    return vectorstore
 
-        # ✨ [개선점 2] MultiQueryRetriever 사용
-        base_retriever = vectorstore.as_retriever(search_kwargs={'k': 20})
-        multi_query_retriever = MultiQueryRetriever.from_llm(
-            retriever=base_retriever, llm=_llm, prompt=_query_prompt
-        )
-    return multi_query_retriever
-
-# --- 3. RAG 체인 구성 ---
-def setup_rag_chain(retriever, reranker, llm, response_prompt):
-    """RAG 파이프라인의 모든 구성요소를 연결하여 하나의 체인으로 만듭니다."""
+# --- 3. RAG 체인 구성 (✨ 2단계 적용) ---
+def setup_rag_chain(vectorstore, reranker, llm, response_prompt, query_prompt):
+    """사용자 관심사에 따라 동적으로 필터링되는 RAG 체인을 구성합니다."""
 
     def rerank_documents(inputs):
         query = inputs['question']
@@ -159,39 +154,60 @@ def setup_rag_chain(retriever, reranker, llm, response_prompt):
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
-    # ✨ [오류 수정 및 최적화] RAG 체인 구성
-    # 1. 문서 검색, 재정렬을 한 번에 처리하는 체인을 정의합니다.
-    #    이렇게 하면 동일한 작업을 여러 번 반복하지 않아 효율적입니다.
-    context_chain = (
-        RunnablePassthrough.assign(documents=retriever)
-        .assign(documents=RunnableLambda(rerank_documents))
+    # ✨ [2단계] 사용자 관심 분야(interests)에 따라 동적으로 Retriever를 생성하는 함수
+    def get_dynamic_retriever(inputs: dict):
+        interests = inputs.get("interests", [])
+        search_kwargs = {'k': 20}
+        
+        # 관심 분야가 설정된 경우, 메타데이터 필터를 추가합니다.
+        if interests:
+            # Qdrant는 $or 조건을 지원하지 않으므로, should 조건을 사용합니다.
+            # 하지만 간단한 구현을 위해 여기서는 첫번째 관심사만 필터링합니다.
+            # 고급 필터링은 Qdrant의 필터링 문법을 따라야 합니다.
+            # 여기서는 간단하게 'must' 조건으로 첫번째 관심사를 필터링합니다.
+            # 실제로는 여러 관심사에 대해 'should' 조건을 구성해야 합니다.
+            search_kwargs['filter'] = {
+                "must": [{"key": "metadata.policy_type", "match": {"any": interests}}]
+            }
+            
+        base_retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
+        
+        multi_query_retriever = MultiQueryRetriever.from_llm(
+            retriever=base_retriever, llm=llm, prompt=query_prompt
+        )
+        return multi_query_retriever
+
+    # RAG 체인 구성
+    # 1. get_dynamic_retriever를 호출하여 필터링된 retriever를 가져옵니다.
+    # 2. 해당 retriever로 문서를 검색합니다.
+    # 3. 검색된 문서를 rerank하고 포맷팅하여 최종 답변을 생성합니다.
+    rag_chain = (
+        {
+            "documents": RunnableLambda(lambda inputs: get_dynamic_retriever(inputs).invoke(inputs["question"], config=RunnableConfig(run_name="retrieval"))),
+            "question": lambda x: x["question"]
+        }
+        | RunnableLambda(rerank_documents).with_config(run_name="reranking")
+        | {
+            "answer": (
+                RunnablePassthrough.assign(context=lambda docs: format_docs(docs))
+                | response_prompt
+                | llm
+                | StrOutputParser()
+            ),
+            "sources": lambda docs: docs
+        }
     )
-
-    # 2. 최종적으로 답변과 근거 문서를 함께 반환하는 체인을 구성합니다.
-    #    RunnableParallel({})을 사용하여 답변 생성과 근거 문서 추출을 병렬로 처리합니다.
-    chain_with_source = context_chain | {
-        "answer": (
-            RunnablePassthrough.assign(context=lambda x: format_docs(x['documents']))
-            | response_prompt
-            | llm
-            | StrOutputParser()
-        ),
-        "sources": lambda x: x['documents']
-    }
-    
-    return chain_with_source
-
+    return rag_chain
 
 # --- 컴포넌트 로드 ---
 try:
     llm, reranker_model, query_prompt, response_prompt_template = get_models_and_prompts()
-    retriever = get_vector_store_and_retriever(llm, query_prompt)
-    rag_chain_with_source = setup_rag_chain(retriever, reranker_model, llm, response_prompt_template)
+    vectorstore = create_vector_store()
+    rag_chain_with_source = setup_rag_chain(vectorstore, reranker_model, llm, response_prompt_template, query_prompt)
 except Exception as e:
     st.error(f"RAG 구성 요소 설정 중 오류 발생: {e}")
     st.exception(e)
     st.stop()
-
 
 # -----------------------
 # SIDEBAR UI
@@ -217,7 +233,7 @@ with st.sidebar:
         st.success("맞춤 조건이 저장되었습니다!")
 
         if interests:
-            welcome_message = f"안녕하세요! {age}세, '{interests[0]}' 분야에 관심이 있으시군요. 이제부터 맞춤형으로 답변해 드릴게요!"
+            welcome_message = f"안녕하세요! {age}세, '{', '.join(interests)}' 분야에 관심이 있으시군요. 이제부터 관련 정책 위주로 찾아드릴게요!"
         else:
             welcome_message = f"안녕하세요! {age}세이시군요. 관심 분야를 선택하시면 더 정확한 추천을 받을 수 있어요."
         
@@ -228,8 +244,8 @@ with st.sidebar:
 # -----------------------
 # MAIN UI
 # -----------------------
-st.title("🤖 청년 정책 큐레이터 v2")
-st.caption("AI 기반 맞춤형 정책 탐색기 (개선된 RAG 적용)")
+st.title("🤖 청년 정책 큐레이터 v3")
+st.caption("관심 분야 필터링 기능이 적용된 맞춤형 탐색기")
 
 recommended_questions_db = {
     "주거": ["전세보증금 이자 지원 정책 알려줘", "역세권 청년주택 신청 자격은?"],
@@ -243,11 +259,7 @@ profile_interests = st.session_state.get("profile", {}).get("interests", [])
 if profile_interests:
     questions_to_show = recommended_questions_db.get(profile_interests[0], [])
 else:
-    # 관심분야 미설정 시 모든 카테고리에서 하나씩 보여주기
-    questions_to_show = [
-        "취업 준비생인데 면접 정장 빌릴 수 있어?",
-        "희망두배 청년통장이 뭐야?"
-    ]
+    questions_to_show = ["전세보증금 이자 지원 정책 알려줘", "취업 준비생인데 면접 정장 빌릴 수 있어?"]
 
 cols = st.columns(len(questions_to_show))
 for i, question in enumerate(questions_to_show):
@@ -261,7 +273,7 @@ for i, question in enumerate(questions_to_show):
 if not st.session_state.messages:
     profile = st.session_state.get("profile", {})
     if profile.get("age") and profile.get("interests"):
-         welcome_message = f"안녕하세요! {profile['age']}세, '{profile['interests'][0]}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!"
+         welcome_message = f"안녕하세요! {profile['age']}세, '{', '.join(profile['interests'])}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!"
     else:
         welcome_message = "안녕하세요! 어떤 정책이 궁금하신가요? 왼쪽 사이드바에서 맞춤 정보를 설정할 수 있습니다."
     st.session_state.messages.append({"role": "assistant", "content": welcome_message})
@@ -272,7 +284,7 @@ for message in st.session_state.messages:
         if "sources" in message and message["sources"]:
             with st.expander("📚 근거 자료 확인하기"):
                 for source in message["sources"]:
-                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')})")
+                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')}) | 유형: {source.metadata.get('policy_type', 'N/A')}")
                     st.write(source.page_content)
 
 prompt = st.chat_input("궁금한 정책에 대해 질문해보세요.")
@@ -288,13 +300,19 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("AI가 맞춤 정책 정보를 찾고 있습니다..."):
             try:
-                # ✨ [개선점 4] 통합된 RAG 체인 호출
-                result = rag_chain_with_source.invoke({"question": prompt})
+                # ✨ [3단계] RAG 체인 호출 시 사용자 관심 분야 전달
+                profile_interests = st.session_state.get("profile", {}).get("interests", [])
+                
+                result = rag_chain_with_source.invoke({
+                    "question": prompt,
+                    "interests": profile_interests
+                })
+                
                 response = result.get("answer", "오류: 답변을 생성하지 못했습니다.")
                 final_docs = result.get("sources", [])
 
                 if not final_docs:
-                     response = "죄송합니다. 제공된 문서에서는 관련 정보를 찾을 수 없습니다. 좀 더 구체적으로 질문해주시겠어요?"
+                     response = "죄송합니다. 선택하신 관심 분야에서는 관련 정보를 찾을 수 없습니다. 다른 분야를 선택하시거나 질문을 바꿔보세요."
 
             except Exception as e:
                 response = f"답변 생성 중 오류가 발생했습니다: {e}"
