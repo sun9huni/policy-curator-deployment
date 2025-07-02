@@ -114,7 +114,6 @@ except Exception as e:
 # CONVERSATIONAL RAG CHAIN
 # -----------------------
 
-# [개선] 대화 맥락을 이해하는 RAG 체인 구성
 contextualize_q_system_prompt = """
 Given a chat history and the latest user question which might reference context in the chat history, 
 formulate a standalone question which can be understood without the chat history. 
@@ -155,8 +154,10 @@ rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chai
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+# [수정] profile 세션 상태를 앱 시작 시 초기화합니다.
+if "profile" not in st.session_state:
+    st.session_state.profile = {}
 
-# 대화 기록을 LangChain이 이해할 수 있는 형태로 변환
 from langchain_core.messages import AIMessage, HumanMessage
 def get_chat_history(messages):
     history = []
@@ -167,7 +168,6 @@ def get_chat_history(messages):
             history.append(AIMessage(content=msg["content"]))
     return history
 
-# 대화형 RAG 체인에 메모리 추가
 conversational_rag_chain = RunnableWithMessageHistory(
     rag_chain,
     lambda session_id: get_chat_history(st.session_state.messages),
@@ -179,18 +179,19 @@ conversational_rag_chain = RunnableWithMessageHistory(
 with st.sidebar:
     st.header("🎯 나의 맞춤 조건 설정")
     st.markdown("AI가 더 정확한 정책을 추천하도록 정보를 입력해주세요.")
+    # 이제 st.session_state.profile이 항상 존재하므로 .get() 호출이 안전합니다.
     age = st.number_input("나이(만)", min_value=18, max_value=100, value=st.session_state.profile.get("age", 25))
     interests = st.multiselect(
         "주요 관심 분야",
         ['주거', '일자리/창업', '금융/자산', '복지/문화'],
         default=st.session_state.profile.get("interests", [])
     )
-    # [수정] '조건 저장 및 반영' 버튼 및 로직 추가
     if st.button("✅ 조건 저장 및 반영", type="primary", use_container_width=True):
         st.session_state.profile = { "age": age, "interests": interests }
         st.success("맞춤 조건이 저장되었습니다!")
         time.sleep(1)
         st.rerun()
+
 
 # -----------------------
 # MAIN UI & CHAT LOGIC
@@ -201,7 +202,12 @@ st.caption("AI 기반 맞춤형 정책 탐색기")
 
 # 초기 환영 메시지
 if not st.session_state.messages:
-    st.session_state.messages.append({"role": "assistant", "content": "안녕하세요! 어떤 정책이 궁금하신가요?"})
+    profile = st.session_state.get("profile", {})
+    if profile.get("age") and profile.get("interests"):
+        welcome_message = f"안녕하세요! {profile['age']}세, '{profile['interests'][0]}' 분야에 관심이 있으시군요."
+    else:
+        welcome_message = "안녕하세요! 어떤 정책이 궁금하신가요?"
+    st.session_state.messages.append({"role": "assistant", "content": welcome_message})
 
 # 이전 대화 기록 표시
 for message in st.session_state.messages:
@@ -216,11 +222,9 @@ if prompt := st.chat_input("궁금한 정책에 대해 질문해보세요."):
 
     with st.chat_message("assistant"):
         try:
-            # [개선] 스트리밍 응답을 위한 UI 준비
             response_placeholder = st.empty()
             full_response = ""
 
-            # [개선] 스트리밍 방식으로 체인 실행
             stream_handler = conversational_rag_chain.stream(
                 {"input": prompt},
                 {"configurable": {"session_id": "any_session_id"}},
@@ -233,10 +237,11 @@ if prompt := st.chat_input("궁금한 정책에 대해 질문해보세요."):
             
             response_placeholder.markdown(full_response)
             
-            # 전체 응답이 완료된 후, 대화 기록에 저장
             st.session_state.messages.append({"role": "assistant", "content": full_response})
 
         except Exception as e:
             error_message = f"답변 생성 중 오류가 발생했습니다: {e}"
             st.error(error_message)
             st.session_state.messages.append({"role": "assistant", "content": error_message})
+            
+    st.rerun()
