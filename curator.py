@@ -150,7 +150,7 @@ if "selected_question" not in st.session_state:
 with st.sidebar:
     st.header("🎯 나의 맞춤 조건 설정")
     st.markdown("AI가 더 정확한 정책을 추천하도록 정보를 입력해주세요.")
-    age = st.number_input("나이(만)", min_value=18, max_value=100, value=st.session_state.profile.get("age", 25))
+    age = st.number_input("나이(만)", min_value=19, max_value=39, value=st.session_state.profile.get("age", 25))
     interests = st.multiselect(
         "주요 관심 분야",
         ['주거', '일자리/창업', '금융/자산', '복지/문화'],
