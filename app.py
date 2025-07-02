@@ -245,10 +245,8 @@ if profile_interests:
 else:
     # 관심분야 미설정 시 모든 카테고리에서 하나씩 보여주기
     questions_to_show = [
-        "전세보증금 이자 지원 정책 알려줘",
         "취업 준비생인데 면접 정장 빌릴 수 있어?",
-        "희망두배 청년통장 가입 조건이 뭐야?",
-        "서울시 청년수당 신청 방법 알려줘"
+        "희망두배 청년통장이 뭐야?"
     ]
 
 cols = st.columns(len(questions_to_show))
