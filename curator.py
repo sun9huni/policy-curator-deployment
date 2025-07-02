@@ -92,7 +92,7 @@ def get_rag_components():
     )
     retriever = vectorstore.as_retriever(search_kwargs={'k': 20})
 
-    llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o-mini", temperature=0.1)
+    llm = ChatOpenAI(api_key=openai_api_key, model="gpt-3.5-turbo", temperature=0.1)
 
     prompt_template = PromptTemplate.from_template(
         """당신은 대한민국 정부 정책 전문가입니다. 사용자의 질문에 대해 아래의 '문서 내용'을 바탕으로, 명확하고 친절하게 답변해주세요.
