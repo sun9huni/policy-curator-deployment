@@ -1,4 +1,17 @@
+# ======================================================================
+# 파일 1: app.py
+# 지능형 쿼리 확장 기능이 추가되고, RAG 파이프라인 로직이 개선되었습니다.
+# ======================================================================
 import streamlit as st
+import time
+import os
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.vectorstores import Qdrant
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from sentence_transformers import CrossEncoder
 
 # -----------------------
 # PAGE CONFIG
@@ -14,21 +27,11 @@ st.set_page_config(
 # SECRETS
 # -----------------------
 
-openai_api_key = st.secrets["OPENAI_API_KEY"]
-
-# -----------------------
-# IMPORTS
-# -----------------------
-
-import time
-import os
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import Qdrant
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from sentence_transformers import CrossEncoder
+try:
+    openai_api_key = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    st.error("오류: OpenAI API 키를 찾을 수 없습니다. Streamlit Cloud의 Secrets 설정을 확인해주세요.")
+    st.stop()
 
 # -----------------------
 # CSS
@@ -84,16 +87,14 @@ def get_rag_components():
     chunks = text_splitter.split_documents(documents)
 
     st.sidebar.info("데이터베이스를 구축하고 있습니다...")
-
     embeddings = OpenAIEmbeddings(api_key=openai_api_key)
     vectorstore = Qdrant.from_documents(
         chunks, embeddings, location=":memory:", collection_name="policy_documents"
     )
     retriever = vectorstore.as_retriever(search_kwargs={'k': 20})
-
     st.sidebar.success("데이터베이스 구축 완료!")
 
-    llm = ChatOpenAI(api_key=openai_api_key, temperature=0.1)
+    llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o-mini", temperature=0.1)
 
     prompt_template = PromptTemplate.from_template(
         """당신은 대한민국 정부 정책 전문가입니다. 사용자의 질문에 대해 아래의 '문서 내용'을 바탕으로, 명확하고 친절하게 답변해주세요.
@@ -172,22 +173,10 @@ st.title("🤖 청년 정책 큐레이터")
 st.caption("AI 기반 맞춤형 정책 탐색기")
 
 recommended_questions_db = {
-    "주거": [
-        "임차보증금 알려줘",
-        "역세권 청년주택 알려줘?"
-    ],
-    "일자리/창업": [
-        "청년내일채움공제 지금도 신청할 수 있나?",
-        "서울시 청년수당으로 무엇에 쓸 수 있는지 알려줘"
-    ],
-    "금융/자산": [
-        "희망두배 청년통장은 어떤 혜택이 있나?",
-        "청년내일저축계좌 지원금은 얼마까지 받을 수 있나?"
-    ],
-    "복지/문화": [
-        "고립은둔청년 지원사업은 어떤 내용이야?",
-        "자립준비청년 자립수당은 어떻게 신청하나?"
-    ]
+    "주거": ["임차보증금 알려줘", "역세권 청년주택 알려줘?"],
+    "일자리/창업": ["청년내일채움공제 지금도 신청할 수 있나?", "서울시 청년수당으로 무엇에 쓸 수 있는지 알려줘"],
+    "금융/자산": ["희망두배 청년통장은 어떤 혜택이 있나?", "청년내일저축계좌 지원금은 얼마까지 받을 수 있나?"],
+    "복지/문화": ["고립은둔청년 지원사업은 어떤 내용이야?", "자립준비청년 자립수당은 어떻게 신청하나?"]
 }
 
 st.markdown("##### 무엇을 도와드릴까요?")
@@ -215,7 +204,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "sources" in message:
-            with st.expander("📚 근거 자료 확인하기"):
+            with st.expander("� 근거 자료 확인하기"):
                 for source in message["sources"]:
                     st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')})")
                     st.write(source.page_content)
@@ -233,33 +222,57 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("질문을 분석하고 관련 정보를 찾는 중입니다..."):
             try:
-                expanded_queries = expand_keywords(prompt)
-
-                expansion_prompt = PromptTemplate.from_template(
-                    """당신은 한국 청년 정책 검색어 전문가입니다.
-                    사용자의 질문을 보고, 관련성이 높은 정책명, 제도명, 혹은 프로그램명을 최대 3개 생성해주세요.
-                    특히 다른 이름으로 불릴 가능성이 있다면 반드시 포함해주세요.
-                    쉼표로 구분된 하나의 문자열로 응답해주세요.
-                    질문: {question}"""
-                )
-                query_expansion_chain = expansion_prompt | llm | StrOutputParser()
-                expanded_queries_str = query_expansion_chain.invoke({"question": prompt})
-                expanded_queries += [q.strip() for q in expanded_queries_str.split(',') if q.strip()]
-                expanded_queries = list(set(expanded_queries))
-
-                all_retrieved_docs = []
-                for q in expanded_queries:
-                    all_retrieved_docs.extend(retriever.invoke(q))
-
-                unique_docs = list({doc.page_content: doc for doc in all_retrieved_docs}.values())
-
+                # --- [개선] 1. 초기 검색 및 관련성 평가 ---
+                initial_docs = retriever.invoke(prompt)
+                unique_initial_docs = list({doc.page_content: doc for doc in initial_docs}.values())
+                
+                relevance_score = 0.0
                 final_docs = []
-                if unique_docs:
-                    pairs = [[prompt, doc.page_content] for doc in unique_docs]
+
+                if unique_initial_docs:
+                    pairs = [[prompt, doc.page_content] for doc in unique_initial_docs]
                     scores = reranker_model.predict(pairs)
-                    doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
+                    if scores.any():
+                        relevance_score = max(scores)
+                
+                RELEVANCE_THRESHOLD = 0.1 # 관련성 임계값 설정
+
+                # --- [개선] 2. 조건부 쿼리 확장 실행 ---
+                if relevance_score < RELEVANCE_THRESHOLD:
+                    with st.spinner("초기 검색 결과가 낮아, 추가적인 검색을 수행합니다..."):
+                        # 키워드 기반 확장
+                        expanded_queries = expand_keywords(prompt)
+
+                        # LLM 기반 확장
+                        expansion_prompt = PromptTemplate.from_template(
+                            """당신은 한국 청년 정책 검색어 전문가입니다.
+                            사용자의 질문을 보고, 관련성이 높은 정책명, 제도명, 혹은 프로그램명을 최대 3개 생성해주세요.
+                            쉼표로 구분된 하나의 문자열로 응답해주세요. 질문: {question}"""
+                        )
+                        query_expansion_chain = expansion_prompt | llm | StrOutputParser()
+                        expanded_queries_str = query_expansion_chain.invoke({"question": prompt})
+                        expanded_queries += [q.strip() for q in expanded_queries_str.split(',') if q.strip()]
+                        expanded_queries = list(set(expanded_queries))
+
+                        # 확장된 쿼리로 재검색
+                        all_retrieved_docs = []
+                        for q in expanded_queries:
+                            all_retrieved_docs.extend(retriever.invoke(q))
+                        
+                        unique_docs = list({doc.page_content: doc for doc in all_retrieved_docs}.values())
+                        
+                        # 최종 재순위화
+                        if unique_docs:
+                            pairs = [[prompt, doc.page_content] for doc in unique_docs]
+                            scores = reranker_model.predict(pairs)
+                            doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
+                            final_docs = [doc for score, doc in doc_scores[:3]]
+                else:
+                    # 관련성이 높으면 초기 검색 결과 사용
+                    doc_scores = sorted(zip(scores, unique_initial_docs), key=lambda x: x[0], reverse=True)
                     final_docs = [doc for score, doc in doc_scores[:3]]
 
+                # --- 3. 최종 답변 생성 ---
                 if final_docs:
                     context = "\n\n".join(doc.page_content for doc in final_docs)
                     final_prompt = prompt_template.format(context=context, question=prompt)
