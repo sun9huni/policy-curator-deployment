@@ -1,1 +1,10 @@
-streamlit==1.36.0
+streamlit
+langchain
+langchain-google-genai
+langchain-community
+langchain-text-splitters
+pypdf
+qdrant-client
+google-generativeai
+python-dotenv
+sentence-transformers
