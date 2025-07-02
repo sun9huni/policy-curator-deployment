@@ -258,9 +258,42 @@ for i, question in enumerate(questions_to_show):
 # -----------------------
 # CHAT UI
 # -----------------------
+st.title("🤖 청년 정책 큐레이터 v2")
+st.caption("AI 기반 맞춤형 정책 탐색기 (개선된 RAG 적용)")
+
+recommended_questions_db = {
+    "주거": ["전세보증금 이자 지원 정책 알려줘", "역세권 청년주택 신청 자격은?"],
+    "일자리/창업": ["취업 준비생인데 면접 정장 빌릴 수 있어?", "서울시에서 인턴십 할 수 있는 프로그램 찾아줘"],
+    "금융/자산": ["희망두배 청년통장 가입 조건이 뭐야?", "학자금 대출 이자 지원 사업에 대해 설명해줘"],
+    "복지/문화": ["서울시 청년수당 신청 방법 알려줘", "청년들이 문화생활 즐길 수 있게 지원해주는 정책 있어?"]
+}
+
+st.markdown("##### 👇 이런 질문은 어떠세요?")
+profile_interests = st.session_state.get("profile", {}).get("interests", [])
+if profile_interests:
+    questions_to_show = recommended_questions_db.get(profile_interests[0], [])
+else:
+    # 관심분야 미설정 시 모든 카테고리에서 하나씩 보여주기
+    questions_to_show = [
+        "취업 준비생인데 면접 정장 빌릴 수 있어?",
+        "희망두배 청년통장이 뭐야?"
+    ]
+
+cols = st.columns(len(questions_to_show))
+for i, question in enumerate(questions_to_show):
+    if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
+        st.session_state.selected_question = question
+        st.rerun()
+
+# -----------------------
+# CHAT UI
+# -----------------------
 if not st.session_state.messages:
     profile = st.session_state.get("profile", {})
-    welcome_message = f"안녕하세요! {profile['age']}세, '{', '.join(profile['interests'])}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!" if profile.get("age") and profile.get("interests") else "안녕하세요! 어떤 정책이 궁금하신가요? 왼쪽 사이드바에서 맞춤 정보를 설정할 수 있습니다."
+    if profile.get("age") and profile.get("interests"):
+         welcome_message = f"안녕하세요! {profile['age']}세, '{profile['interests'][0]}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!"
+    else:
+        welcome_message = "안녕하세요! 어떤 정책이 궁금하신가요? 왼쪽 사이드바에서 맞춤 정보를 설정할 수 있습니다."
     st.session_state.messages.append({"role": "assistant", "content": welcome_message})
 
 for message in st.session_state.messages:
@@ -269,7 +302,7 @@ for message in st.session_state.messages:
         if "sources" in message and message["sources"]:
             with st.expander("📚 근거 자료 확인하기"):
                 for source in message["sources"]:
-                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')}) | 유형: {source.metadata.get('policy_type', 'N/A')}")
+                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')})")
                     st.write(source.page_content)
 
 prompt = st.chat_input("궁금한 정책에 대해 질문해보세요.")
@@ -283,52 +316,28 @@ if prompt:
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        try:
-            # ✨ 상세한 처리 단계 안내 적용 (스트리밍 제외)
-            profile_interests = st.session_state.get("profile", {}).get("interests", [])
-            
-            # 1. Retriever 생성
-            with st.spinner("1/3. 질문을 분석하고 관련 정책을 탐색 중입니다..."):
-                llm_for_retrieval = ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0)
-                search_kwargs = {'k': 20}
-                if profile_interests:
-                    search_kwargs['filter'] = {"must": [{"key": "metadata.policy_type", "match": {"any": profile_interests}}]}
-                base_retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
-                retriever = MultiQueryRetriever.from_llm(retriever=base_retriever, llm=llm_for_retrieval, prompt=query_prompt)
-                retrieved_docs = retriever.invoke(prompt)
+        with st.spinner("AI가 맞춤 정책 정보를 찾고 있습니다..."):
+            try:
+                # ✨ [개선점 4] 통합된 RAG 체인 호출
+                result = rag_chain_with_source.invoke({"question": prompt})
+                response = result.get("answer", "오류: 답변을 생성하지 못했습니다.")
+                final_docs = result.get("sources", [])
 
-            # 2. Reranking
-            with st.spinner("2/3. 찾은 정보의 순위를 질문과 가장 관련 높은 순으로 조정 중입니다..."):
-                unique_docs = list({doc.page_content: doc for doc in retrieved_docs}.values())
-                if not unique_docs:
-                    st.warning("관련 문서를 찾지 못했습니다. 질문을 구체화하거나 다른 관심 분야를 선택해보세요.")
-                    st.stop()
-                
-                pairs = [[prompt, doc.page_content] for doc in unique_docs]
-                scores = reranker_model.predict(pairs)
-                doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
-                final_docs = [doc for score, doc in doc_scores[:5]]
-                context = "\n\n".join(doc.page_content for doc in final_docs)
+                if not final_docs:
+                     response = "죄송합니다. 제공된 문서에서는 관련 정보를 찾을 수 없습니다. 좀 더 구체적으로 질문해주시겠어요?"
 
-            # 3. 답변 생성 (스트리밍 없이)
-            with st.spinner("3/3. AI가 맞춤 답변을 생성 중입니다..."):
-                llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0.1)
-                final_prompt = response_prompt_template.format(context=context, question=prompt)
-                response = llm.invoke(final_prompt).content
-            
-            # 최종 답변 표시 및 저장
-            st.markdown(response)
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": response,
-                "sources": final_docs
-            })
+            except Exception as e:
+                response = f"답변 생성 중 오류가 발생했습니다: {e}"
+                final_docs = []
+                st.error(response)
+                st.exception(e)
 
-        except Exception as e:
-            error_message = f"답변 생성 중 오류가 발생했습니다: {e}"
-            st.error(error_message)
-            st.session_state.messages.append({"role": "assistant", "content": error_message})
+        st.markdown(response)
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response,
+            "sources": final_docs
+        })
 
-    # 작업 완료 후 페이지를 다시 실행하여 UI를 정리
     st.rerun()
 
