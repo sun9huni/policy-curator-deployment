@@ -1,16 +1,4 @@
 import streamlit as st
-import time
-import os
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import Qdrant
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from sentence_transformers import CrossEncoder
 
 # -----------------------
 # PAGE CONFIG
@@ -26,13 +14,21 @@ st.set_page_config(
 # SECRETS
 # -----------------------
 
-# Streamlit Cloud의 Secrets에서 API 키를 안전하게 로드합니다.
-try:
-    openai_api_key = st.secrets["OPENAI_API_KEY"]
-except Exception:
-    st.error("오류: OpenAI API 키를 찾을 수 없습니다. Streamlit Cloud의 Secrets 설정을 확인해주세요.")
-    st.stop()
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 
+# -----------------------
+# IMPORTS
+# -----------------------
+
+import time
+import os
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.vectorstores import Qdrant
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from sentence_transformers import CrossEncoder
 
 # -----------------------
 # CSS
@@ -70,10 +66,6 @@ DATA_PATH = "./data"
 
 @st.cache_resource
 def get_rag_components():
-    """
-    RAG 파이프라인의 핵심 구성 요소들을 설정하고 반환합니다.
-    이 함수는 앱 실행 시 한 번만 호출되며, 결과는 캐시에 저장됩니다.
-    """
     st.sidebar.info("문서를 로드하고 있습니다...")
     if not os.path.exists(DATA_PATH) or not any(f.endswith('.pdf') for f in os.listdir(DATA_PATH)):
         st.error(f"오류: '{DATA_PATH}' 폴더를 찾을 수 없거나 PDF가 없습니다.")
@@ -85,101 +77,81 @@ def get_rag_components():
             loader = PyPDFLoader(os.path.join(DATA_PATH, file))
             documents.extend(loader.load())
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=150
+    )
     chunks = text_splitter.split_documents(documents)
 
     st.sidebar.info("데이터베이스를 구축하고 있습니다...")
+
     embeddings = OpenAIEmbeddings(api_key=openai_api_key)
     vectorstore = Qdrant.from_documents(
         chunks, embeddings, location=":memory:", collection_name="policy_documents"
     )
     retriever = vectorstore.as_retriever(search_kwargs={'k': 20})
+
     st.sidebar.success("데이터베이스 구축 완료!")
 
-    llm = ChatOpenAI(api_key=openai_api_key, model="gpt-4o-mini", temperature=0.1)
+    llm = ChatOpenAI(api_key=openai_api_key, temperature=0.1)
+
+    prompt_template = PromptTemplate.from_template(
+        """당신은 대한민국 정부 정책 전문가입니다. 사용자의 질문에 대해 아래의 '문서 내용'을 바탕으로, 명확하고 친절하게 답변해주세요.
+        답변은 항상 한국어로 작성해야 합니다. 문서 내용에 없는 정보는 답변에 포함하지 마세요.
+        [문서 내용]
+        {context}
+        [사용자 질문]
+        {question}
+        [답변]
+        """
+    )
 
     st.sidebar.info("Re-ranker 모델을 로드하고 있습니다...")
     reranker_model = CrossEncoder('bongsoo/kpf-cross-encoder-v1')
     st.sidebar.success("모든 컴포넌트 로드 완료!")
 
-    return retriever, llm, reranker_model
+    return retriever, llm, prompt_template, reranker_model
 
 try:
-    retriever, llm, reranker_model = get_rag_components()
+    retriever, llm, prompt_template, reranker_model = get_rag_components()
 except Exception as e:
     st.error(f"RAG 구성 요소 설정 중 오류 발생: {e}")
     st.stop()
 
 # -----------------------
-# CONVERSATIONAL RAG CHAIN
+# KEYWORD DICT
 # -----------------------
 
-contextualize_q_system_prompt = """
-Given a chat history and the latest user question which might reference context in the chat history, 
-formulate a standalone question which can be understood without the chat history. 
-Do NOT answer the question, just reformulate it if needed and otherwise return it as is.
-"""
-contextualize_q_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", contextualize_q_system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ]
-)
-history_aware_retriever = create_history_aware_retriever(
-    llm, retriever, contextualize_q_prompt
-)
+keyword_dict = {
+    "청년 월세": ["월세 지원", "임대료 지원", "청년 주거"],
+    "청년수당": ["청년 지원금", "서울시 청년수당", "생활비 지원"],
+    "청년AI취업캠프": ["AI취업캠프", "청년 취업 프로그램"],
+    "청년도전": ["청년도전 지원사업", "심리 지원 프로그램"],
+    "역세권 청년주택": ["청년 주거", "역세권 주택"],
+    "서울형 청년인턴 직무캠프": ["청년 인턴십", "청년 직무 체험", "서울 청년 인턴"],
+}
 
-qa_system_prompt = """당신은 대한민국 정부 정책 전문가입니다. 
-사용자의 질문에 대해 아래의 '문서 내용'을 바탕으로, 명확하고 친절하게 답변해주세요.
-답변은 항상 한국어로 작성해야 합니다. 문서 내용에 없는 정보는 답변에 포함하지 마세요.
-\n\n
-[문서 내용]
-{context}
-"""
-qa_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", qa_system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ]
-)
-question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-
-rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+def expand_keywords(user_query):
+    expanded = [user_query]
+    for key, synonyms in keyword_dict.items():
+        if key in user_query:
+            expanded += synonyms
+    return list(set(expanded))
 
 # -----------------------
-# SESSION STATE & SIDEBAR
+# SIDEBAR UI
 # -----------------------
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-# [수정] profile 세션 상태를 앱 시작 시 초기화합니다.
 if "profile" not in st.session_state:
     st.session_state.profile = {}
-
-from langchain_core.messages import AIMessage, HumanMessage
-def get_chat_history(messages):
-    history = []
-    for msg in messages:
-        if msg["role"] == "user":
-            history.append(HumanMessage(content=msg["content"]))
-        else:
-            history.append(AIMessage(content=msg["content"]))
-    return history
-
-conversational_rag_chain = RunnableWithMessageHistory(
-    rag_chain,
-    lambda session_id: get_chat_history(st.session_state.messages),
-    input_messages_key="input",
-    history_messages_key="chat_history",
-    output_messages_key="answer",
-)
+if "selected_question" not in st.session_state:
+    st.session_state.selected_question = None
 
 with st.sidebar:
     st.header("🎯 나의 맞춤 조건 설정")
     st.markdown("AI가 더 정확한 정책을 추천하도록 정보를 입력해주세요.")
-    # 이제 st.session_state.profile이 항상 존재하므로 .get() 호출이 안전합니다.
     age = st.number_input("나이(만)", min_value=18, max_value=100, value=st.session_state.profile.get("age", 25))
     interests = st.multiselect(
         "주요 관심 분야",
@@ -192,9 +164,8 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-
 # -----------------------
-# MAIN UI & CHAT LOGIC
+# MAIN UI
 # -----------------------
 
 st.title("🤖 청년 정책 큐레이터")
