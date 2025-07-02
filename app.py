@@ -253,35 +253,6 @@ cols = st.columns(len(questions_to_show))
 for i, question in enumerate(questions_to_show):
     if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
         st.session_state.selected_question = question
-
-# -----------------------
-# CHAT UI
-# -----------------------
-st.title("🤖 청년 정책 큐레이터 v2")
-st.caption("AI 기반 맞춤형 정책 탐색기 (개선된 RAG 적용)")
-
-recommended_questions_db = {
-    "주거": ["전세보증금 이자 지원 정책 알려줘", "역세권 청년주택 신청 자격은?"],
-    "일자리/창업": ["취업 준비생인데 면접 정장 빌릴 수 있어?", "서울시에서 인턴십 할 수 있는 프로그램 찾아줘"],
-    "금융/자산": ["희망두배 청년통장 가입 조건이 뭐야?", "학자금 대출 이자 지원 사업에 대해 설명해줘"],
-    "복지/문화": ["서울시 청년수당 신청 방법 알려줘", "청년들이 문화생활 즐길 수 있게 지원해주는 정책 있어?"]
-}
-
-st.markdown("##### 👇 이런 질문은 어떠세요?")
-profile_interests = st.session_state.get("profile", {}).get("interests", [])
-if profile_interests:
-    questions_to_show = recommended_questions_db.get(profile_interests[0], [])
-else:
-    # 관심분야 미설정 시 모든 카테고리에서 하나씩 보여주기
-    questions_to_show = [
-        "취업 준비생인데 면접 정장 빌릴 수 있어?",
-        "희망두배 청년통장이 뭐야?"
-    ]
-
-cols = st.columns(len(questions_to_show))
-for i, question in enumerate(questions_to_show):
-    if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
-        st.session_state.selected_question = question
         st.rerun()
 
 # -----------------------
@@ -339,5 +310,4 @@ if prompt:
         })
 
     st.rerun()
-
 
