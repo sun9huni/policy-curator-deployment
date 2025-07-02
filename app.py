@@ -136,11 +136,11 @@ def create_vector_store():
         )
     return vectorstore
 
-# --- 3. RAG 체인 구성 (✨ 2단계 적용) ---
+# --- 3. RAG 체인 구성 (✨ 2단계 적용 및 오류 수정) ---
 def setup_rag_chain(vectorstore, reranker, llm, response_prompt, query_prompt):
     """사용자 관심사에 따라 동적으로 필터링되는 RAG 체인을 구성합니다."""
 
-    def rerank_documents(inputs):
+    def rerank_documents(inputs: dict) -> list:
         query = inputs['question']
         retrieved_docs = inputs['documents']
         unique_docs = list({doc.page_content: doc for doc in retrieved_docs}.values())
@@ -151,21 +151,14 @@ def setup_rag_chain(vectorstore, reranker, llm, response_prompt, query_prompt):
         doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
         return [doc for score, doc in doc_scores[:5]]
 
-    def format_docs(docs):
+    def format_docs(docs: list) -> str:
         return "\n\n".join(doc.page_content for doc in docs)
 
-    # ✨ [2단계] 사용자 관심 분야(interests)에 따라 동적으로 Retriever를 생성하는 함수
     def get_dynamic_retriever(inputs: dict):
         interests = inputs.get("interests", [])
         search_kwargs = {'k': 20}
         
-        # 관심 분야가 설정된 경우, 메타데이터 필터를 추가합니다.
         if interests:
-            # Qdrant는 $or 조건을 지원하지 않으므로, should 조건을 사용합니다.
-            # 하지만 간단한 구현을 위해 여기서는 첫번째 관심사만 필터링합니다.
-            # 고급 필터링은 Qdrant의 필터링 문법을 따라야 합니다.
-            # 여기서는 간단하게 'must' 조건으로 첫번째 관심사를 필터링합니다.
-            # 실제로는 여러 관심사에 대해 'should' 조건을 구성해야 합니다.
             search_kwargs['filter'] = {
                 "must": [{"key": "metadata.policy_type", "match": {"any": interests}}]
             }
@@ -177,24 +170,21 @@ def setup_rag_chain(vectorstore, reranker, llm, response_prompt, query_prompt):
         )
         return multi_query_retriever
 
-    # RAG 체인 구성
-    # 1. get_dynamic_retriever를 호출하여 필터링된 retriever를 가져옵니다.
-    # 2. 해당 retriever로 문서를 검색합니다.
-    # 3. 검색된 문서를 rerank하고 포맷팅하여 최종 답변을 생성합니다.
+    # ✨ [오류 수정] RAG 체인 구성
+    # 1. RunnablePassthrough.assign을 사용하여 체인 전체에서 딕셔너리 구조를 유지합니다.
+    # 2. 검색 -> 재정렬 -> 답변 생성의 데이터 흐름을 명확하게 정의합니다.
     rag_chain = (
-        {
-            "documents": RunnableLambda(lambda inputs: get_dynamic_retriever(inputs).invoke(inputs["question"], config=RunnableConfig(run_name="retrieval"))),
-            "question": lambda x: x["question"]
-        }
-        | RunnableLambda(rerank_documents).with_config(run_name="reranking")
+        RunnablePassthrough
+        .assign(documents=lambda inputs: get_dynamic_retriever(inputs).invoke(inputs["question"], config=RunnableConfig(run_name="retrieval")))
+        .assign(documents=rerank_documents)
         | {
             "answer": (
-                RunnablePassthrough.assign(context=lambda docs: format_docs(docs))
+                RunnablePassthrough.assign(context=lambda x: format_docs(x['documents']))
                 | response_prompt
                 | llm
                 | StrOutputParser()
             ),
-            "sources": lambda docs: docs
+            "sources": lambda x: x['documents']
         }
     )
     return rag_chain
