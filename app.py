@@ -123,8 +123,6 @@ def get_vector_store_and_retriever(_llm, _query_prompt):
         chunks = text_splitter.split_documents(documents)
 
         # ✨ [개선점 1] 한국어 특화 임베딩 모델 사용
-        # OpenAI의 임베딩 모델 대신, 한국어에 더 강한 성능을 보이는 공개 모델을 사용합니다.
-        # 이를 통해 단어와 문장의 의미를 더 정확하게 파악하여 검색 성능을 높입니다.
         embedding_model = HuggingFaceEmbeddings(
             model_name="jhgan/ko-sbert-nli",
             model_kwargs={'device': 'cpu'},
@@ -137,8 +135,6 @@ def get_vector_store_and_retriever(_llm, _query_prompt):
         )
 
         # ✨ [개선점 2] MultiQueryRetriever 사용
-        # 사용자의 질문 하나를 LLM을 이용해 여러 개의 유사한 질문으로 확장합니다.
-        # 이렇게 확장된 질문들로 문서를 검색하여, 사용자의 다양한 표현방식에 더 잘 대응하고 검색 누락을 방지합니다.
         base_retriever = vectorstore.as_retriever(search_kwargs={'k': 20})
         multi_query_retriever = MultiQueryRetriever.from_llm(
             retriever=base_retriever, llm=_llm, prompt=_query_prompt
@@ -149,56 +145,40 @@ def get_vector_store_and_retriever(_llm, _query_prompt):
 def setup_rag_chain(retriever, reranker, llm, response_prompt):
     """RAG 파이프라인의 모든 구성요소를 연결하여 하나의 체인으로 만듭니다."""
 
-    # ✨ [개선점 3] Reranker를 체인에 통합
-    # Retriever가 찾아온 문서들을 Reranker를 이용해 질문과 가장 관련성 높은 순으로 재정렬합니다.
-    # 상위 5개만 선택하여 LLM에 전달함으로써, 더 정확하고 집중된 컨텍스트를 제공합니다.
     def rerank_documents(inputs):
         query = inputs['question']
         retrieved_docs = inputs['documents']
-        
-        # 중복 문서 제거
         unique_docs = list({doc.page_content: doc for doc in retrieved_docs}.values())
-        
         if not unique_docs:
             return []
-
         pairs = [[query, doc.page_content] for doc in unique_docs]
         scores = reranker.predict(pairs)
-        
-        # 점수가 높은 순으로 정렬하여 상위 5개 문서 반환
         doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
         return [doc for score, doc in doc_scores[:5]]
 
-    # 문서 내용을 하나의 문자열로 합치는 함수
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
-    # ✨ RAG 체인 구성
-    # 1. RunnablePassthrough: 사용자의 질문을 체인 전체에 전달합니다.
-    # 2. retriever: MultiQueryRetriever가 관련 문서를 검색합니다.
-    # 3. rerank_documents: 검색된 문서를 재정렬하여 정확도를 높입니다.
-    # 4. format_docs: 재정렬된 문서를 LLM에 넣기 좋은 형태로 변환합니다.
-    # 5. response_prompt | llm | StrOutputParser: 최종 답변을 생성합니다.
-    rag_chain = (
-        {
-            "context": RunnablePassthrough.assign(documents=retriever)
-                       .assign(documents=RunnableLambda(rerank_documents))
-                       .assign(context=lambda x: format_docs(x['documents'])),
-            "question": RunnablePassthrough()
-        }
-        | response_prompt
-        | llm
-        | StrOutputParser()
+    # ✨ [오류 수정 및 최적화] RAG 체인 구성
+    # 1. 문서 검색, 재정렬을 한 번에 처리하는 체인을 정의합니다.
+    #    이렇게 하면 동일한 작업을 여러 번 반복하지 않아 효율적입니다.
+    context_chain = (
+        RunnablePassthrough.assign(documents=retriever)
+        .assign(documents=RunnableLambda(rerank_documents))
     )
+
+    # 2. 최종적으로 답변과 근거 문서를 함께 반환하는 체인을 구성합니다.
+    #    RunnableParallel({})을 사용하여 답변 생성과 근거 문서 추출을 병렬로 처리합니다.
+    chain_with_source = context_chain | {
+        "answer": (
+            RunnablePassthrough.assign(context=lambda x: format_docs(x['documents']))
+            | response_prompt
+            | llm
+            | StrOutputParser()
+        ),
+        "sources": lambda x: x['documents']
+    }
     
-    # 소스 문서도 함께 반환하기 위한 체인
-    chain_with_source = RunnablePassthrough.assign(
-        answer=rag_chain
-    ).assign(
-        sources=RunnablePassthrough.assign(documents=retriever)
-                  .assign(documents=RunnableLambda(rerank_documents))
-                  .lambda_func(lambda x: x['documents'])
-    )
     return chain_with_source
 
 
@@ -311,7 +291,6 @@ if prompt:
         with st.spinner("AI가 맞춤 정책 정보를 찾고 있습니다..."):
             try:
                 # ✨ [개선점 4] 통합된 RAG 체인 호출
-                # 복잡했던 로직 대신, 구성해둔 RAG 체인을 한 줄로 호출하여 답변과 근거 문서를 모두 가져옵니다.
                 result = rag_chain_with_source.invoke({"question": prompt})
                 response = result.get("answer", "오류: 답변을 생성하지 못했습니다.")
                 final_docs = result.get("sources", [])
