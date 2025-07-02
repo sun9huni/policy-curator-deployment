@@ -260,10 +260,7 @@ for i, question in enumerate(questions_to_show):
 # -----------------------
 if not st.session_state.messages:
     profile = st.session_state.get("profile", {})
-    if profile.get("age") and profile.get("interests"):
-         welcome_message = f"안녕하세요! {profile['age']}세, '{profile['interests'][0]}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!"
-    else:
-        welcome_message = "안녕하세요! 어떤 정책이 궁금하신가요? 왼쪽 사이드바에서 맞춤 정보를 설정할 수 있습니다."
+    welcome_message = f"안녕하세요! {profile['age']}세, '{', '.join(profile['interests'])}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!" if profile.get("age") and profile.get("interests") else "안녕하세요! 어떤 정책이 궁금하신가요? 왼쪽 사이드바에서 맞춤 정보를 설정할 수 있습니다."
     st.session_state.messages.append({"role": "assistant", "content": welcome_message})
 
 for message in st.session_state.messages:
@@ -272,7 +269,7 @@ for message in st.session_state.messages:
         if "sources" in message and message["sources"]:
             with st.expander("📚 근거 자료 확인하기"):
                 for source in message["sources"]:
-                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')})")
+                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')}) | 유형: {source.metadata.get('policy_type', 'N/A')}")
                     st.write(source.page_content)
 
 prompt = st.chat_input("궁금한 정책에 대해 질문해보세요.")
@@ -286,27 +283,56 @@ if prompt:
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("AI가 맞춤 정책 정보를 찾고 있습니다..."):
-            try:
-                # ✨ [개선점 4] 통합된 RAG 체인 호출
-                result = rag_chain_with_source.invoke({"question": prompt})
-                response = result.get("answer", "오류: 답변을 생성하지 못했습니다.")
-                final_docs = result.get("sources", [])
+        try:
+            # ✨ [개선 2] 상세한 처리 단계 안내 및 스트리밍 적용
+            profile_interests = st.session_state.get("profile", {}).get("interests", [])
+            
+            # 1. Retriever 생성
+            with st.spinner("1/3. 질문을 분석하고 관련 정책을 탐색 중입니다..."):
+                llm_for_retrieval = ChatOpenAI(api_key=openai_api_key, model="gpt-4o", temperature=0)
+                search_kwargs = {'k': 20}
+                if profile_interests:
+                    search_kwargs['filter'] = {"must": [{"key": "metadata.policy_type", "match": {"any": profile_interests}}]}
+                base_retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
+                retriever = MultiQueryRetriever.from_llm(retriever=base_retriever, llm=llm_for_retrieval, prompt=query_prompt)
+                retrieved_docs = retriever.invoke(prompt)
 
-                if not final_docs:
-                     response = "죄송합니다. 제공된 문서에서는 관련 정보를 찾을 수 없습니다. 좀 더 구체적으로 질문해주시겠어요?"
+            # 2. Reranking
+            with st.spinner("2/3. 찾은 정보의 순위를 질문과 가장 관련 높은 순으로 조정 중입니다..."):
+                unique_docs = list({doc.page_content: doc for doc in retrieved_docs}.values())
+                if not unique_docs:
+                    st.warning("관련 문서를 찾지 못했습니다. 질문을 구체화하거나 다른 관심 분야를 선택해보세요.")
+                    st.stop()
+                
+                pairs = [[prompt, doc.page_content] for doc in unique_docs]
+                scores = reranker_model.predict(pairs)
+                doc_scores = sorted(zip(scores, unique_docs), key=lambda x: x[0], reverse=True)
+                final_docs = [doc for score, doc in doc_scores[:5]]
+                context = "\n\n".join(doc.page_content for doc in final_docs)
 
-            except Exception as e:
-                response = f"답변 생성 중 오류가 발생했습니다: {e}"
-                final_docs = []
-                st.error(response)
-                st.exception(e)
+            # 3. 스트리밍 답변 생성
+            with st.spinner("3/3. AI가 맞춤 답변을 생성 중입니다..."):
+                answer_container = st.empty()
+                stream_handler = StreamHandler(answer_container)
+                streaming_llm = ChatOpenAI(api_key=openai_api_key, model="gpt-3.5-turbo", temperature=0.1, streaming=True, callbacks=[stream_handler])
+                
+                final_prompt = response_prompt_template.format(context=context, question=prompt)
+                
+                # 스트리밍 실행 (결과는 핸들러가 처리하므로 변수에 저장할 필요 없음)
+                streaming_llm.invoke(final_prompt)
+                
+                # 최종 답변과 소스를 세션 상태에 저장
+                response = answer_container.markdown(stream_handler.text)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": stream_handler.text,
+                    "sources": final_docs
+                })
 
-        st.markdown(response)
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": response,
-            "sources": final_docs
-        })
+        except Exception as e:
+            error_message = f"답변 생성 중 오류가 발생했습니다: {e}"
+            st.error(error_message)
+            st.session_state.messages.append({"role": "assistant", "content": error_message})
 
+    # 스트리밍 완료 후 페이지를 다시 실행하여 expander 등을 정상적으로 표시
     st.rerun()
