@@ -228,6 +228,7 @@ with st.sidebar:
 # -----------------------
 # MAIN UI
 # -----------------------
+
 st.title("💁‍♂️ 청년 정책 큐레이터")
 st.caption("AI 기반 맞춤형 정책 탐색기")
 
@@ -238,22 +239,28 @@ recommended_questions_db = {
     "복지/문화": ["서울시 청년수당 신청 방법 알려줘", "청년들이 문화생활 즐길 수 있게 지원해주는 정책 있어?"]
 }
 
-st.markdown("##### 👇 이런 질문은 어떠세요?")
-profile_interests = st.session_state.get("profile", {}).get("interests", [])
-if profile_interests:
-    questions_to_show = recommended_questions_db.get(profile_interests[0], [])
-else:
-    # 관심분야 미설정 시 모든 카테고리에서 하나씩 보여주기
-    questions_to_show = [
-        "취업 준비생인데 면접 정장 빌릴 수 있어?",
-        "희망두배 청년통장이 뭐야?"
-    ]
+st.markdown("##### 무엇을 도와드릴까요?")
 
-cols = st.columns(len(questions_to_show))
-for i, question in enumerate(questions_to_show):
-    if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
-        st.session_state.selected_question = question
-        st.rerun()
+# [개선] 프로필의 관심 분야에 따라 추천 질문을 동적으로 표시하는 로직
+profile_interests = st.session_state.get("profile", {}).get("interests", [])
+questions_to_show = []
+
+if profile_interests:
+    # 사용자가 선택한 첫 번째 관심 분야를 기준으로 질문을 가져옵니다.
+    main_interest = profile_interests[0]
+    questions_to_show = recommended_questions_db.get(main_interest, [])
+else:
+    # 관심 분야를 선택하지 않았을 경우, 기본 추천 질문을 표시합니다.
+    questions_to_show = ["희망두배 청년통장 가입 조건이 뭐야?", "서울시 청년수당 신청 방법 알려줘"]
+
+# 선택된 질문이 있을 경우에만 버튼들을 화면에 표시합니다.
+if questions_to_show:
+    cols = st.columns(len(questions_to_show))
+    for i, question in enumerate(questions_to_show):
+        if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
+            st.session_state.selected_question = question
+            st.rerun() # 버튼 클릭 시 즉시 채팅창에 반영되도록 새로고침
+            
 
 # -----------------------
 # CHAT UI
