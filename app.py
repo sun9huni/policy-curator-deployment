@@ -253,7 +253,6 @@ cols = st.columns(len(questions_to_show))
 for i, question in enumerate(questions_to_show):
     if cols[i].button(question, use_container_width=True, key=f"rec_q_{i}"):
         st.session_state.selected_question = question
-        st.rerun()
 
 # -----------------------
 # CHAT UI
