@@ -291,7 +291,7 @@ for i, question in enumerate(questions_to_show):
 if not st.session_state.messages:
     profile = st.session_state.get("profile", {})
     if profile.get("age") and profile.get("interests"):
-         welcome_message = f"안녕하세요! {profile['age']}세, '{profile['interests'][0]}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!"
+         welcome_message = f"안녕하세요! {profile['age']}세, '{', '.join(profile['interests'])}' 분야에 관심이 있으시군요. 무엇이든 물어보세요!"
     else:
         welcome_message = "안녕하세요! 어떤 정책이 궁금하신가요? 왼쪽 사이드바에서 맞춤 정보를 설정할 수 있습니다."
     st.session_state.messages.append({"role": "assistant", "content": welcome_message})
@@ -302,7 +302,7 @@ for message in st.session_state.messages:
         if "sources" in message and message["sources"]:
             with st.expander("📚 근거 자료 확인하기"):
                 for source in message["sources"]:
-                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')})")
+                    st.info(f"출처: {source.metadata.get('source', 'N/A')} (페이지: {source.metadata.get('page', 'N/A')}) | 유형: {source.metadata.get('policy_type', 'N/A')}")
                     st.write(source.page_content)
 
 prompt = st.chat_input("궁금한 정책에 대해 질문해보세요.")
@@ -318,13 +318,19 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("AI가 맞춤 정책 정보를 찾고 있습니다..."):
             try:
-                # ✨ [개선점 4] 통합된 RAG 체인 호출
-                result = rag_chain_with_source.invoke({"question": prompt})
+                # ✨ [3단계] RAG 체인 호출 시 사용자 관심 분야 전달
+                profile_interests = st.session_state.get("profile", {}).get("interests", [])
+                
+                result = rag_chain_with_source.invoke({
+                    "question": prompt,
+                    "interests": profile_interests
+                })
+                
                 response = result.get("answer", "오류: 답변을 생성하지 못했습니다.")
                 final_docs = result.get("sources", [])
 
                 if not final_docs:
-                     response = "죄송합니다. 제공된 문서에서는 관련 정보를 찾을 수 없습니다. 좀 더 구체적으로 질문해주시겠어요?"
+                     response = "죄송합니다. 선택하신 관심 분야에서는 관련 정보를 찾을 수 없습니다. 다른 분야를 선택하시거나 질문을 바꿔보세요."
 
             except Exception as e:
                 response = f"답변 생성 중 오류가 발생했습니다: {e}"
@@ -340,4 +346,5 @@ if prompt:
         })
 
     st.rerun()
+
 
