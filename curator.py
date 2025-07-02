@@ -179,8 +179,18 @@ conversational_rag_chain = RunnableWithMessageHistory(
 with st.sidebar:
     st.header("🎯 나의 맞춤 조건 설정")
     st.markdown("AI가 더 정확한 정책을 추천하도록 정보를 입력해주세요.")
-    age = st.number_input("나이(만)", min_value=18, max_value=100)
-    interests = st.multiselect("주요 관심 분야", ['주거', '일자리/창업', '금융/자산', '복지/문화'])
+    age = st.number_input("나이(만)", min_value=18, max_value=100, value=st.session_state.profile.get("age", 25))
+    interests = st.multiselect(
+        "주요 관심 분야",
+        ['주거', '일자리/창업', '금융/자산', '복지/문화'],
+        default=st.session_state.profile.get("interests", [])
+    )
+    # [수정] '조건 저장 및 반영' 버튼 및 로직 추가
+    if st.button("✅ 조건 저장 및 반영", type="primary", use_container_width=True):
+        st.session_state.profile = { "age": age, "interests": interests }
+        st.success("맞춤 조건이 저장되었습니다!")
+        time.sleep(1)
+        st.rerun()
 
 # -----------------------
 # MAIN UI & CHAT LOGIC
